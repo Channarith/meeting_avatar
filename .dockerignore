@@ -1,0 +1,9 @@
+.venv
+.pydeps
+**/__pycache__
+**/*.pyc
+.git
+data/sessions
+data/settings.json
+data/persona.json
+assets/_headshot_texture_preview.png

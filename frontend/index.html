@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chan meeting avatar</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="importmap">
+  { "imports": { "three": "/vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">Chan</span>
+        <span class="brand-sub">Meeting avatar</span>
+      </div>
+      <div class="status" id="status"><span class="dot"></span><span id="status-text">Idle</span></div>
+      <div class="version" id="version"></div>
+    </header>
+    <div class="workspace">
+      <section class="stage-wrap">
+        <div id="stage" class="stage"></div>
+        <div class="stage-bar">
+          <label>Turn <input id="yaw" type="range" min="-180" max="180" value="0"></label>
+          <label>Frame <input id="crop" type="range" min="32" max="78" value="50"></label>
+          <button type="button" class="btn" id="popout">Pop out camera</button>
+          <button type="button" class="btn" id="fullscreen">Full screen</button>
+        </div>
+        <p class="stage-note" id="model-note">Loading the headshot…</p>
+      </section>
+      <aside class="panel">
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab is-on" data-tab="meeting">Meeting</button>
+          <button type="button" class="tab" data-tab="train">Train</button>
+          <button type="button" class="tab" data-tab="setup">Setup</button>
+        </div>
+        <div id="meeting" class="tab-panel is-on">
+          <div class="card">
+            <h2>Join as your camera</h2>
+            <div class="field">
+              <span>Meeting</span>
+              <select id="platform">
+                <option>Zoom</option>
+                <option>Google Meet</option>
+                <option>Microsoft Teams</option>
+                <option>Slack</option>
+              </select>
+            </div>
+            <div class="row">
+              <input class="grow" id="meeting-url" type="url" placeholder="Paste the meeting link">
+              <button type="button" class="btn" id="open-meeting">Open</button>
+            </div>
+            <div class="field">
+              <span>Listen microphone</span>
+              <select id="mic"></select>
+            </div>
+            <div class="field">
+              <span>Speak to output</span>
+              <select id="speaker"></select>
+            </div>
+            <label class="check"><input id="auto-speak" type="checkbox"> Speak when someone addresses you</label>
+            <label class="check"><input id="say-intro" type="checkbox" checked> Say the introduction when you go live</label>
+            <label class="check"><input id="volunteer" type="checkbox"> Also ask a question after an answer</label>
+            <div class="row">
+              <button type="button" class="btn-accent" id="go-live">Go live</button>
+              <button type="button" class="btn" id="stop-live" disabled>Stop</button>
+            </div>
+            <div class="row">
+              <button type="button" class="btn" id="raise-hand" aria-pressed="false">Raise hand</button>
+              <span class="hint" id="hand-note">Your hand is down on the meeting camera.</span>
+            </div>
+            <p class="hint" id="listen-mode"></p>
+          </div>
+          <div class="card">
+            <h3>Say this in the meeting</h3>
+            <p class="hint">Type the words you want heard. The avatar says them as written through the speak output above. You can do this before you go live.</p>
+            <textarea id="exact" rows="4" placeholder="Type the answer you want said"></textarea>
+            <div class="row">
+              <button type="button" class="btn-accent" id="speak-exact">Speak into the meeting</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Room</h3>
+            <div id="transcript" class="transcript"></div>
+            <div class="row">
+              <input class="grow" id="heard" type="text" placeholder="What they just said">
+              <button type="button" class="btn" id="draft">Draft</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Answer</h3>
+            <textarea id="answer" placeholder="A draft lands here. Edit it, or type your own reply."></textarea>
+            <p class="hint" id="reason">Speak sends whatever is in this box, as written.</p>
+            <div class="row">
+              <button type="button" class="btn-good" id="speak-answer">Speak into the meeting</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Question you would ask</h3>
+            <textarea id="question" placeholder="A question will land here"></textarea>
+            <div class="row">
+              <button type="button" class="btn-good" id="speak-question">Ask it</button>
+            </div>
+          </div>
+          <p class="toast" id="toast"></p>
+        </div>
+        <div id="train" class="tab-panel">
+          <div class="card">
+            <h2>How you sound in a meeting</h2>
+            <p class="hint">The avatar answers and asks questions from this profile. It does not invent facts you have not given it.</p>
+            <div class="field"><span>Name people use</span><input id="p-name"></div>
+            <div class="field"><span>Role</span><input id="p-role"></div>
+            <div class="field"><span>Company</span><input id="p-company"></div>
+            <div class="field"><span>Speaking style</span><textarea id="p-style" placeholder="Short sentences, direct, you ask who owns the follow-up."></textarea></div>
+            <div class="field"><span>Priorities, one per line</span><textarea id="p-priorities"></textarea></div>
+            <div class="field"><span>Expertise, one per line</span><textarea id="p-expertise"></textarea></div>
+            <div class="field"><span>Things you avoid saying, one per line</span><textarea id="p-avoid"></textarea></div>
+            <div class="field"><span>Phrases you actually use, one per line</span><textarea id="p-phrases"></textarea></div>
+            <div class="field"><span>Names that mean you, comma separated</span><input id="p-cues"></div>
+            <div class="field"><span>Introduction</span><textarea id="p-intro"></textarea></div>
+            <div class="field"><span>Male voice</span><select id="p-voice"></select></div>
+            <p class="hint" id="voice-note"></p>
+            <div class="field"><span>Your tone, from a recording of you</span><input id="voice-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.webm,.ogg,.flac"></div>
+            <div class="field"><span>Tone hint sent with the clone</span>
+              <select id="voice-tone">
+                <option value="professional">Professional</option>
+                <option value="calm">Calm</option>
+                <option value="friendly">Friendly</option>
+                <option value="casual">Casual</option>
+                <option value="authoritative">Authoritative</option>
+                <option value="warm">Warm</option>
+                <option value="expressive">Expressive</option>
+              </select>
+            </div>
+            <div class="row">
+              <button type="button" class="btn" id="record-voice">Record your voice</button>
+              <button type="button" class="btn-accent" id="clone-voice">Clone a male voice</button>
+            </div>
+            <div class="row">
+              <input class="grow" id="voice-id" type="text" placeholder="Or paste an xAI voice id" autocomplete="off">
+              <button type="button" class="btn" id="use-voice-id">Use voice id</button>
+            </div>
+            <p class="hint">Record up to 90 seconds of your own voice. xAI turns that recording into a male voice and keeps your tone. Rex speaks until the clone is ready.</p>
+          </div>
+          <div class="card">
+            <h3>Answers you would give</h3>
+            <div id="answers" class="examples"></div>
+            <button type="button" class="btn" id="add-answer">Add an answer</button>
+          </div>
+          <div class="card">
+            <h3>Questions you would ask</h3>
+            <div id="questions" class="examples"></div>
+            <button type="button" class="btn" id="add-question">Add a question</button>
+          </div>
+          <div class="card">
+            <h3>Notes and facts</h3>
+            <div class="field"><span>One note</span><textarea id="note-draft" placeholder="A fact, preference, or decision you want the avatar to remember."></textarea></div>
+            <button type="button" class="btn" id="add-note">Add note</button>
+            <div id="notes" class="examples"></div>
+          </div>
+          <div class="card">
+            <h3>Train from something you said</h3>
+            <textarea id="transcript" placeholder="Paste a transcript, an email you wrote, or a few answers in your own words."></textarea>
+            <button type="button" class="btn-accent" id="train-btn">Train from this</button>
+          </div>
+          <div class="card">
+            <h3>Rehearse</h3>
+            <div class="row">
+              <input class="grow" id="rehearse" type="text" placeholder="Ask something the room might ask you">
+              <button type="button" class="btn" id="rehearse-btn">Answer as you</button>
+            </div>
+          </div>
+          <div class="row">
+            <button type="button" class="btn-accent" id="save-persona">Save profile</button>
+          </div>
+          <p class="toast" id="train-toast"></p>
+        </div>
+        <div id="setup" class="tab-panel setup">
+          <div class="card">
+            <h2>Language model</h2>
+            <p class="hint" id="llm-status">Checking…</p>
+            <div class="field"><span>Provider override</span><input id="s-provider" placeholder="nemotron or openai"></div>
+            <div class="field"><span>Base URL override</span><input id="s-base" placeholder="Leave blank to use the environment"></div>
+            <div class="field"><span>Model override</span><input id="s-model"></div>
+            <div class="field"><span>API key override</span><input id="s-key" type="password" placeholder="Leave blank to keep the current key" autocomplete="off"></div>
+            <label class="check"><input id="s-clear" type="checkbox"> Clear a key saved in this app</label>
+            <div class="field"><span>xAI API key</span><input id="s-xai" type="password" placeholder="Leave blank to use XAI_API_KEY" autocomplete="off"></div>
+            <label class="check"><input id="s-clear-xai" type="checkbox"> Clear a saved xAI key</label>
+            <p class="hint">Meeting text is sent to that language model. Speech is sent to xAI when an xAI key is set, including the recording used to clone your voice. Selected-microphone audio is sent to OpenAI for transcription only when an OpenAI key is available. Keys stay on this machine.</p>
+          </div>
+          <div class="card">
+            <h2>Face</h2>
+            <p class="hint" id="ace-status">Checking Audio2Face…</p>
+            <div class="field"><span>Audio2Face-3D endpoint</span><input id="s-a2f" placeholder="127.0.0.1:52000 or grpc.nvcf.nvidia.com:443" autocomplete="off"></div>
+            <div class="field"><span>Cloud function id</span><input id="s-a2f-fn" placeholder="Only for NVIDIA Cloud Functions" autocomplete="off"></div>
+            <div class="field"><span>NGC or NVIDIA API key</span><input id="s-a2f-key" type="password" placeholder="Leave blank to keep the current key" autocomplete="off"></div>
+            <label class="check"><input id="s-clear-a2f" type="checkbox"> Clear the saved Audio2Face key</label>
+            <p class="hint">Speech audio is sent to NVIDIA ACE Audio2Face-3D. The weights that come back move the mouth on this headshot, on this page and on the popped-out camera. A local NIM listens on port 52000. Cloud use needs the function id from the NVIDIA API catalog.</p>
+            <p class="hint" id="a2f-test">Test Audio2Face sends a few seconds of your voice sample to the endpoint above and plays the mouth weights on the avatar.</p>
+            <div class="row">
+              <button type="button" class="btn-accent" id="test-a2f">Test Audio2Face</button>
+              <button type="button" class="btn" id="save-settings">Save settings</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Show up in the meeting</h2>
+            <p class="hint">You join from your own account. The room sees this headshot as your camera and hears the avatar as your microphone. The full-body model is not used.</p>
+            <ol>
+              <li>Click Pop out camera. That window is the live avatar. OBS is not installed on this Mac, so this page cannot publish a virtual camera itself. Install OBS, window-capture the popped-out page, and start Virtual Camera.</li>
+              <li>Install BlackHole 2ch and BlackHole 16ch. In Audio MIDI Setup, make a Multi-Output device called Meeting Listen from your headphones plus BlackHole 16ch, and another called Avatar Voice from your headphones plus BlackHole 2ch.</li>
+              <li>In <span class="platform" id="platform-label">Zoom</span>, set the camera to the device named OBS Virtual Camera, the microphone to BlackHole 2ch, and the speaker to Meeting Listen.</li>
+              <li>Set this Mac’s output, or this page’s speak device, to Avatar Voice. Set Listen microphone to BlackHole 16ch.</li>
+              <li>Those two BlackHole devices have to stay different, or the avatar will hear itself.</li>
+              <li>Open the meeting link and go live. The introduction says this is your avatar. If someone asks, it will say so again.</li>
+            </ol>
+            <p class="hint">Zoom, Google Meet, Microsoft Teams, and Slack huddles all pick the camera and microphone in their device settings. Speech uses the male xAI voice, then a male Mac voice if xAI cannot be reached. The same app is also packaged in Docker on port 8081.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <script type="module" src="/js/main.js?v=a2ftest"></script>
+</body>
+</html>

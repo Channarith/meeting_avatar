@@ -1,0 +1,19 @@
+services:
+  meeting-avatar:
+    build: .
+    image: meeting-avatar:1.0.0
+    ports:
+      - "8081:8080"
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      NEMOTRON_API_KEY: ${NEMOTRON_API_KEY:-}
+      NEMOTRON_BASE_URL: ${NEMOTRON_BASE_URL:-}
+      NEMOTRON_MODEL: ${NEMOTRON_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

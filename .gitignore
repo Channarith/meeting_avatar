@@ -1,0 +1,12 @@
+.venv/
+.git-store/
+.pydeps/
+__pycache__/
+*.pyc
+data/persona.json
+data/settings.json
+data/voice.json
+data/chan-voice.wav
+data/sessions/
+.env
+assets/_headshot_texture_preview.png

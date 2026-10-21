@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: nvidia-ace
+Version: 1.2.0
+Summary: UNKNOWN
+Home-page: UNKNOWN
+Author: nvidia
+License: UNKNOWN
+Platform: UNKNOWN
+Requires-Dist: PyYAML==6.0.1
+Requires-Dist: googleapis-common-protos==1.60.0
+Requires-Dist: grpclib==0.4.7
+Requires-Dist: protobuf-gen==0.0.4
+Requires-Dist: protobuf==4.24.1
+
+UNKNOWN
+
