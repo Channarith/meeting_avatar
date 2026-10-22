@@ -97,14 +97,23 @@ _clone_next = 0.0
 def health():
     global _clone_block, _clone_next
     now = time.monotonic()
-    if not _clone_block and now >= _clone_next:
+    if not store.load().get("xai_custom_voice_id") and now >= _clone_next:
         _clone_next = now + 30
         try:
-            store.clone_reference_if_needed()
-        except RuntimeError as exc:
-            message = str(exc)
-            if "reach" not in message.lower():
-                _clone_block = message
+            store.adopt_account_voice()
+        except RuntimeError:
+            pass
+        if store.load().get("xai_custom_voice_id"):
+            _clone_block = ""
+        elif not _clone_block:
+            try:
+                store.clone_reference_if_needed()
+            except RuntimeError as exc:
+                message = str(exc)
+                if "reach" not in message.lower():
+                    _clone_block = message
+    elif store.load().get("xai_custom_voice_id"):
+        _clone_block = ""
     status = store.public_llm_status()
     if _clone_block:
         status["voice_clone"] = _clone_block
@@ -138,7 +147,11 @@ def respond(body: RespondIn):
 def tts(body: TtsIn):
     result = store.synthesize(body.text, body.voice or store.load().get("voice"), body.verbatim)
     if not result:
-        return JSONResponse({"ok": False, "fallback": "browser"})
+        return JSONResponse({
+            "ok": False,
+            "fallback": "browser",
+            "error": store.last_speech_error or "Speech could not be generated.",
+        })
     audio, media_type, engine = result
     return Response(content=audio, media_type=media_type, headers={"X-Avatar-Voice": engine})
 
@@ -190,13 +203,32 @@ async def a2f(request: Request):
     return await animate_wav_async(wav, store.load_settings())
 
 
+def _test_speech() -> bytes | None:
+    sample = DATA / "chan-voice.wav"
+    if sample.exists() and sample.stat().st_size > 44:
+        return clip_wav(sample.read_bytes(), 4.0)
+    spoken = store.synthesize(
+        "Hello. The mouth follows these words until Audio2Face is running.",
+        store.load().get("voice"),
+        True,
+    )
+    if not spoken:
+        return None
+    return clip_wav(spoken[0], 4.0)
+
+
 @app.post("/api/a2f/test")
 async def a2f_test():
     settings = store.load_settings()
     status = ace_status(settings)
     empty = face_motion_summary([])
     if not status["library"] or not status["listening"]:
-        return {"ok": False, "connected": False, "frames": [], "error": status["detail"], "summary": empty}
+        spoken = _test_speech()
+        payload = {"ok": False, "connected": False, "frames": [], "error": status["detail"], "summary": empty}
+        if spoken:
+            payload["wav_base64"] = base64.b64encode(spoken).decode("ascii")
+            payload["summary"] = {**empty, "source": "a short spoken line"}
+        return payload
     sample = DATA / "chan-voice.wav"
     source = "your saved voice sample"
     if sample.exists() and sample.stat().st_size > 44:

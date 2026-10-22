@@ -12,6 +12,7 @@ import uuid
 import urllib.error
 import urllib.request
 import wave
+import io
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -380,6 +381,7 @@ class PersonaStore:
         self.persona_path = self.data_dir / "persona.json"
         self.settings_path = self.data_dir / "settings.json"
         self.model_override = None
+        self.last_speech_error = ""
 
     def load(self) -> dict:
         if not self.persona_path.exists():
@@ -459,8 +461,8 @@ class PersonaStore:
         rows = []
         custom = str(persona.get("xai_custom_voice_id") or "")
         if custom:
-            label = persona.get("xai_voice_name") or "Your tone"
-            rows.append({"id": custom, "label": f"{label} · male, your recording", "custom": True})
+            label = persona.get("xai_voice_name") or "Your voice"
+            rows.append({"id": custom, "label": f"{label} · your recording", "custom": True})
         if self.xai_key():
             rows.extend({"id": voice_id, "label": label, "custom": False} for voice_id, label in XAI_MALE_VOICES)
             return rows
@@ -615,14 +617,16 @@ class PersonaStore:
 
     def synthesize(self, text: str, voice: str | None, verbatim: bool = False) -> tuple[bytes, str, str] | None:
         spoken = speech_text(text, verbatim)
+        self.last_speech_error = ""
         if not spoken:
             return None
         if self.xai_key():
             voice_id = resolve_xai_voice(voice, self.load())
             try:
-                return self._xai_tts(spoken, voice_id), "audio/wav", "xai"
-            except RuntimeError:
-                pass
+                audio, media = self._xai_tts(spoken, voice_id)
+                return audio, media, "xai"
+            except RuntimeError as exc:
+                self.last_speech_error = str(exc)
         audio = self._say(spoken, voice)
         if audio:
             return audio, "audio/wav", "mac"
@@ -637,6 +641,20 @@ class PersonaStore:
             return None
         return self.clone_voice(sample.read_bytes(), sample.name, "audio/wav", persona.get("voice_tone") or "professional")
 
+    def adopt_account_voice(self) -> dict | None:
+        persona = self.load()
+        if persona.get("xai_custom_voice_id") or not self.xai_key():
+            return None
+        chosen = newest_custom_voice(self.custom_voices())
+        if not chosen:
+            return None
+        return self._store_custom_voice(persona, chosen, persona.get("voice_tone") or "professional")
+
+    def custom_voices(self) -> list[dict]:
+        payload = self._xai_json("GET", "/custom-voices?limit=100")
+        voices = payload.get("voices") or []
+        return voices if isinstance(voices, list) else []
+
     def clone_voice(self, audio: bytes, filename: str, content_type: str, tone: str) -> dict:
         if not self.xai_key():
             raise RuntimeError("No xAI key is configured.")
@@ -645,32 +663,83 @@ class PersonaStore:
         if len(audio) > 25_000_000:
             raise RuntimeError("Keep the recording under 120 seconds.")
         tone = tone if tone in XAI_TONES else "professional"
+        wav, seconds, upload_name, upload_type = self._reference_wav(audio, filename, content_type)
         persona = self.load()
-        display = f"{persona.get('name') or 'Chan'} meeting voice"
+        display = f"{persona.get('name') or 'Chan'} voice"
         payload = self._xai_form(
             "/custom-voices",
             {
                 "name": display,
-                "description": "Male meeting voice cloned from the owner's own recording.",
-                "gender": "male",
+                "description": "Meeting voice cloned from the owner's own recording.",
                 "language": "en",
                 "use_case": "conversational",
                 "tone": tone,
             },
-            audio,
-            filename,
-            content_type,
+            wav,
+            upload_name,
+            upload_type,
             timeout=120,
         )
+        saved = self._store_custom_voice(persona, payload, tone)
+        if seconds and seconds < 30:
+            saved["short_recording"] = True
+        return saved
+
+    def _store_custom_voice(self, persona: dict, payload: dict, tone: str) -> dict:
         voice_id = str(payload.get("voice_id") or "").strip().lower()
         if not re.fullmatch(r"[a-z0-9]{8}", voice_id):
             raise RuntimeError("xAI did not return a voice id.")
+        display = f"{persona.get('name') or 'Chan'} voice"
         persona["xai_custom_voice_id"] = voice_id
         persona["xai_voice_name"] = str(payload.get("name") or display).strip()[:80]
         persona["voice"] = voice_id
-        persona["voice_tone"] = tone
+        if str(payload.get("tone") or "") in XAI_TONES:
+            persona["voice_tone"] = payload["tone"]
+        elif tone in XAI_TONES:
+            persona["voice_tone"] = tone
         saved = self.save(persona)
         return {"persona": saved, "voice_id": voice_id, "name": saved["xai_voice_name"]}
+
+    def _reference_wav(self, audio: bytes, filename: str, content_type: str) -> tuple[bytes, float, str, str]:
+        suffix = Path(filename or "").suffix.lower()
+        if suffix not in {".wav", ".mp3", ".m4a", ".mp4", ".flac", ".ogg", ".webm", ".aiff", ".aif", ".caf"}:
+            mime = (content_type or "").split(";")[0].strip().lower()
+            suffix = {
+                "audio/wav": ".wav",
+                "audio/x-wav": ".wav",
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
+                "audio/webm": ".webm",
+                "audio/ogg": ".ogg",
+                "audio/flac": ".flac",
+            }.get(mime, ".wav")
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / f"recording{suffix}"
+            target = Path(folder) / "chan-voice.wav"
+            source.write_bytes(audio)
+            commands = []
+            if shutil.which("ffmpeg"):
+                commands.append([
+                    "ffmpeg", "-y", "-i", str(source), "-ac", "1", "-ar", "24000", "-t", "120", str(target),
+                ])
+            if shutil.which("afconvert"):
+                commands.append([
+                    "afconvert", "-f", "WAVE", "-d", "LEI16@24000", "-c", "1", str(source), str(target),
+                ])
+            for command in commands:
+                if target.exists():
+                    target.unlink()
+                subprocess.run(command, check=False, capture_output=True)
+                if target.exists() and target.stat().st_size > 1000:
+                    wav = target.read_bytes()
+                    (self.data_dir / "chan-voice.wav").write_bytes(wav)
+                    return wav, _wav_seconds(wav), "chan-voice.wav", "audio/wav"
+        if audio[:4] == b"RIFF":
+            (self.data_dir / "chan-voice.wav").write_bytes(audio)
+            return audio, _wav_seconds(audio), "chan-voice.wav", "audio/wav"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "", filename or "")[:80] or f"voice{suffix}"
+        mime = (content_type or "application/octet-stream").split(";")[0].strip() or "application/octet-stream"
+        return audio, 0.0, safe_name, mime
 
     def adopt_voice(self, voice_id: str) -> dict:
         if not self.xai_key():
@@ -684,14 +753,9 @@ class PersonaStore:
         if not re.fullmatch(r"[a-z0-9]{8}", voice_id):
             raise RuntimeError("Use rex, leo, or the 8-character voice id from xAI.")
         payload = self._xai_json("GET", f"/custom-voices/{voice_id}")
-        persona["xai_custom_voice_id"] = voice_id
-        persona["xai_voice_name"] = str(payload.get("name") or "Your tone").strip()[:80]
-        persona["voice"] = voice_id
-        if str(payload.get("tone") or "") in XAI_TONES:
-            persona["voice_tone"] = payload["tone"]
-        return {"persona": self.save(persona)}
+        return self._store_custom_voice(persona, payload, persona.get("voice_tone") or "professional")
 
-    def _xai_tts(self, text: str, voice_id: str) -> bytes:
+    def _xai_tts(self, text: str, voice_id: str) -> tuple[bytes, str]:
         raw, content_type = self._xai_request(
             "POST",
             "/tts",
@@ -711,7 +775,9 @@ class PersonaStore:
             raise RuntimeError("xAI returned metadata instead of audio.")
         if len(raw) < 1000:
             raise RuntimeError("xAI returned empty audio.")
-        return raw
+        if raw[:4] == b"RIFF" or "wav" in content_type:
+            return raw, "audio/wav"
+        return raw, "audio/mpeg"
 
     def _xai_json(self, method: str, path: str, payload: dict | None = None) -> dict:
         body = None if payload is None else json.dumps(payload).encode()
@@ -776,20 +842,23 @@ class PersonaStore:
         key = self.xai_key()
         if not key:
             raise RuntimeError("No xAI key is configured.")
-        request = urllib.request.Request(
-            XAI_API + path,
-            data=body,
-            headers={"Authorization": f"Bearer {key}", **headers},
-            method=method,
-        )
+
+        def attempt(proxies: bool) -> tuple[bytes, str]:
+            request = urllib.request.Request(
+                XAI_API + path,
+                data=body,
+                headers={"Authorization": f"Bearer {key}", **headers},
+                method=method,
+            )
+            return _open_xai(request, timeout, proxies)
+
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return response.read(), response.headers.get("Content-Type", "")
-        except urllib.error.HTTPError as exc:
-            detail = scrub(exc.read().decode("utf-8", errors="replace"))
-            raise RuntimeError(_xai_error(exc.code, detail)) from None
-        except urllib.error.URLError as exc:
-            raise RuntimeError("Could not reach xAI.") from exc
+            return attempt(True)
+        except urllib.error.URLError:
+            try:
+                return attempt(False)
+            except urllib.error.URLError as exc:
+                raise RuntimeError("Could not reach xAI.") from exc
 
     def _say(self, spoken: str, voice: str | None) -> bytes | None:
         if not shutil.which("say") or not shutil.which("afconvert"):
@@ -1059,6 +1128,29 @@ PREFERRED_VOICES = [
 ]
 
 
+def _wav_seconds(audio: bytes) -> float:
+    try:
+        with wave.open(io.BytesIO(audio)) as handle:
+            rate = handle.getframerate() or 1
+            return handle.getnframes() / rate
+    except (wave.Error, EOFError):
+        return 0.0
+
+
+def newest_custom_voice(voices: list) -> dict | None:
+    usable = []
+    for voice in voices or []:
+        if not isinstance(voice, dict):
+            continue
+        voice_id = str(voice.get("voice_id") or "").strip().lower()
+        if re.fullmatch(r"[a-z0-9]{8}", voice_id):
+            usable.append({**voice, "voice_id": voice_id})
+    if not usable:
+        return None
+    usable.sort(key=lambda voice: str(voice.get("created_at") or ""))
+    return usable[-1]
+
+
 def resolve_xai_voice(requested: str | None, persona: dict | None) -> str:
     persona = persona or {}
     voice = (requested or "").strip().lower()
@@ -1078,13 +1170,31 @@ def mac_voice_for(requested: str | None, voices: list[str]) -> str:
     return choose_voice("Reed", voices)
 
 
+def _open_xai(request: urllib.request.Request, timeout: int, proxies: bool) -> tuple[bytes, str]:
+    saved = {}
+    if not proxies:
+        for name in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"):
+            if name in os.environ:
+                saved[name] = os.environ.pop(name)
+    opener = urllib.request.build_opener() if proxies else urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return response.read(), response.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        detail = scrub(exc.read().decode("utf-8", errors="replace"))
+        raise RuntimeError(_xai_error(exc.code, detail)) from None
+    finally:
+        os.environ.update(saved)
+
+
 def _xai_error(code: int, detail: str) -> str:
     if code == 401:
         return "xAI rejected the API key."
     if code == 403:
         return (
-            "xAI refused this request. Cloning from the API needs an Enterprise plan. "
-            "You can create the male voice in the xAI console and paste its voice id."
+            "xAI will not create a custom voice with this API key. "
+            "Create it in the xAI console, copy the voice id from the voice card, and paste it here. "
+            "Speak into the meeting then uses that voice instead of Rex."
         )
     if code == 404:
         return "xAI could not find that voice."

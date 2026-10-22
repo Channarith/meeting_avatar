@@ -3,6 +3,7 @@ import unittest
 from backend.persona_engine import (
     direct_address,
     fallback_reply,
+    newest_custom_voice,
     normalize_persona,
     resolve_xai_voice,
     scrub,
@@ -71,6 +72,15 @@ class PersonaTests(unittest.TestCase):
         self.assertEqual(resolve_xai_voice("abcd1234", persona), "abcd1234")
         self.assertEqual(resolve_xai_voice("Samantha", persona), "abcd1234")
         self.assertEqual(resolve_xai_voice("", {}), "rex")
+
+    def test_newest_custom_voice_wins(self):
+        chosen = newest_custom_voice([
+            {"voice_id": "aaaabbbb", "created_at": "2026-01-01T00:00:00Z", "name": "Older"},
+            {"voice_id": "NOT-AN-ID", "created_at": "2026-06-01T00:00:00Z"},
+            {"voice_id": "ccccdddd", "created_at": "2026-04-01T00:00:00Z", "name": "Newer"},
+        ])
+        self.assertEqual(chosen["voice_id"], "ccccdddd")
+        self.assertIsNone(newest_custom_voice([{"voice_id": "rex"}]))
 
     def test_notes_keep_sentences_and_drop_single_letters(self):
         persona = normalize_persona({"name": "Chan", "notes": "This persona values clarity over a vague date."})
