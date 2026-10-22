@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chan meeting avatar</title>
-  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/app.css?v=contrast1">
   <script type="importmap">
   { "imports": { "three": "/vendor/three.module.js" } }
   </script>
@@ -24,7 +24,7 @@
         <div id="stage" class="stage"></div>
         <div class="stage-bar">
           <label>Turn <input id="yaw" type="range" min="-180" max="180" value="0"></label>
-          <label>Frame <input id="crop" type="range" min="32" max="78" value="50"></label>
+          <label>Zoom <input id="crop" type="range" min="20" max="90" value="50"></label>
           <button type="button" class="btn" id="popout">Pop out camera</button>
           <button type="button" class="btn" id="fullscreen">Full screen</button>
         </div>
@@ -75,11 +75,22 @@
           </div>
           <div class="card">
             <h3>Say this in the meeting</h3>
-            <p class="hint">Type the words you want heard. The avatar says them as written through the speak output above. You can do this before you go live.</p>
+            <p class="hint">Type the words you want heard, then press Speak into the meeting. The avatar says them as written and the mouth moves with the audio. You can do this before you go live.</p>
             <textarea id="exact" rows="4" placeholder="Type the answer you want said"></textarea>
             <div class="row">
               <button type="button" class="btn-accent" id="speak-exact">Speak into the meeting</button>
             </div>
+            <p class="hint" id="speak-voice"></p>
+          </div>
+          <div class="card">
+            <h3>Sing a song</h3>
+            <p class="hint">Upload the song file. It plays on the speak device, which is what the meeting hears when its microphone is BlackHole 2ch. Stop pauses it, and Resume continues from that moment. While it sings, the jaw, lips, cheeks, and brows follow the voice and open wider than normal speech.</p>
+            <div class="field"><span>Song file</span><input id="song-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm"></div>
+            <div class="row">
+              <button type="button" class="btn-accent" id="sing-song">Send song to the meeting</button>
+              <button type="button" class="btn" id="stop-song" disabled>Stop</button>
+            </div>
+            <p class="hint" id="song-note"></p>
           </div>
           <div class="card">
             <h3>Room</h3>
@@ -136,13 +147,13 @@
             </div>
             <div class="row">
               <button type="button" class="btn" id="record-voice">Record your voice</button>
-              <button type="button" class="btn-accent" id="clone-voice">Clone a male voice</button>
+              <button type="button" class="btn-accent" id="clone-voice">Use my recording</button>
             </div>
             <div class="row">
-              <input class="grow" id="voice-id" type="text" placeholder="Or paste an xAI voice id" autocomplete="off">
+              <input class="grow" id="voice-id" type="text" placeholder="Paste the voice id from the xAI console" autocomplete="off">
               <button type="button" class="btn" id="use-voice-id">Use voice id</button>
             </div>
-            <p class="hint">Record up to 90 seconds of your own voice. xAI turns that recording into a male voice and keeps your tone. Rex speaks until the clone is ready.</p>
+            <p class="hint">Record about 90 seconds of you talking, then this sends that clip to xAI as a custom voice. Speak into the meeting uses that voice. Rex is only the stand-in until the voice id is saved. If xAI asks for an Enterprise plan on the API, create the voice at <a href="https://console.x.ai" target="_blank" rel="noopener">console.x.ai</a> and paste the id here.</p>
           </div>
           <div class="card">
             <h3>Answers you would give</h3>
@@ -197,8 +208,8 @@
             <div class="field"><span>Cloud function id</span><input id="s-a2f-fn" placeholder="Only for NVIDIA Cloud Functions" autocomplete="off"></div>
             <div class="field"><span>NGC or NVIDIA API key</span><input id="s-a2f-key" type="password" placeholder="Leave blank to keep the current key" autocomplete="off"></div>
             <label class="check"><input id="s-clear-a2f" type="checkbox"> Clear the saved Audio2Face key</label>
-            <p class="hint">Speech audio is sent to NVIDIA ACE Audio2Face-3D. The weights that come back move the mouth on this headshot, on this page and on the popped-out camera. A local NIM listens on port 52000. Cloud use needs the function id from the NVIDIA API catalog.</p>
-            <p class="hint" id="a2f-test">Test Audio2Face sends a few seconds of your voice sample to the endpoint above and plays the mouth weights on the avatar.</p>
+            <p class="hint">Typed words are spoken right away, and the mouth follows that audio on this page and on the popped-out camera. When Audio2Face-3D is listening, its weights replace that local mouth. A local NIM uses port 52000. Cloud use needs the function id from the NVIDIA API catalog.</p>
+            <p class="hint" id="a2f-test">Test Audio2Face checks the endpoint, then speaks a short line so you can see the mouth move.</p>
             <div class="row">
               <button type="button" class="btn-accent" id="test-a2f">Test Audio2Face</button>
               <button type="button" class="btn" id="save-settings">Save settings</button>
@@ -221,6 +232,6 @@
       </aside>
     </div>
   </div>
-  <script type="module" src="/js/main.js?v=a2ftest"></script>
+  <script type="module" src="/js/main.js?v=singfeel2"></script>
 </body>
 </html>

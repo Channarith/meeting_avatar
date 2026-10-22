@@ -1,4 +1,4 @@
-import { AvatarStage } from "./avatar.js?v=ace1";
+import { AvatarStage } from "./avatar.js?v=singfeel2";
 
 const $ = (id) => document.getElementById(id);
 const stage = new AvatarStage($("stage"), { broadcast: "send" });
@@ -21,6 +21,9 @@ stage.onReady = (info) => {
   $("yaw").value = String(Math.round(info.yawDegrees));
   $("crop").value = String(Math.round(info.crop * 100));
   $("model-note").textContent = info.note;
+};
+stage.onView = (info) => {
+  $("crop").value = String(Math.round(info.crop * 100));
 };
 stage.start();
 
@@ -66,6 +69,15 @@ $("draft").addEventListener("click", () => draft($("heard").value, true));
 $("speak-answer").addEventListener("click", () => speak($("answer").value, "answer"));
 $("speak-question").addEventListener("click", () => speak($("question").value, "question"));
 $("speak-exact").addEventListener("click", () => speak($("exact").value, "exact"));
+$("sing-song").addEventListener("click", singSong);
+$("stop-song").addEventListener("click", stopSong);
+$("song-file").addEventListener("change", () => {
+  state.songPause = null;
+  syncSongButton();
+  const file = $("song-file").files[0];
+  $("song-note").textContent = file ? `${file.name} is ready. It plays from the start.` : "";
+});
+document.addEventListener("pointerdown", () => state.audioContext?.resume());
 $("raise-hand").addEventListener("click", () => {
   const raised = window.localStorage.getItem("avatar-hand") !== "1";
   stage.setHand(raised);
@@ -123,11 +135,13 @@ function renderLlm() {
   const ears = health.transcribe
     ? "Selected-mic transcription is available."
     : "Selected-mic transcription needs an OpenAI key. Browser dictation will be used instead.";
-  const voice = health.tts === "xai"
-    ? "Speech uses a male xAI voice."
-    : health.tts === "say"
-      ? "Speech uses a male Mac voice until an xAI key is set."
-      : "Speech uses the browser voice until an xAI key is set.";
+  const voice = health.custom_voice_id
+    ? "Speech uses your xAI voice from the recording."
+    : health.tts === "xai"
+      ? "Speech uses Rex until your recording is saved as an xAI custom voice."
+      : health.tts === "say"
+        ? "Speech uses a male Mac voice until an xAI key is set."
+        : "Speech uses the browser voice until an xAI key is set.";
   $("llm-status").textContent = `${model} ${ears} ${voice}`;
   renderVoiceNote();
   renderAce();
@@ -190,22 +204,29 @@ function fillVoices(voices) {
 
 function renderVoiceNote() {
   const note = $("voice-note");
-  if (!note) return;
+  const speakNote = $("speak-voice");
   const health = state.health || {};
   const persona = state.persona || {};
+  let text = "Rex speaks until your recording is saved as an xAI custom voice.";
   if (health.tts !== "xai") {
-    note.textContent = "Add an xAI API key in Setup. Until then, a male Mac voice speaks if one is installed.";
-    return;
+    text = "Add an xAI API key in Setup. Until then, a male Mac voice speaks if one is installed.";
+  } else if ($("p-voice")?.value === "leo") {
+    text = "Speak into the meeting uses Leo.";
+  } else if (persona.xai_custom_voice_id || health.custom_voice_id) {
+    text = "Speak into the meeting uses your xAI voice from the recording.";
+  } else if (health.voice_clone) {
+    text = health.voice_clone;
   }
-  if (persona.xai_custom_voice_id && persona.voice === persona.xai_custom_voice_id) {
-    note.textContent = "Meetings use your cloned male voice. xAI built it from your recording.";
-    return;
-  }
-  if (persona.xai_custom_voice_id) {
-    note.textContent = "Your cloned voice is in the list. Rex and Leo are the built-in male voices.";
-    return;
-  }
-  note.textContent = "Rex is speaking for now. Record yourself and the clone keeps that tone in a male voice.";
+  if (note) note.textContent = text;
+  if (speakNote) speakNote.textContent = text;
+}
+
+function voiceForSpeech() {
+  const selected = $("p-voice")?.value || state.persona?.voice || "";
+  const custom = state.persona?.xai_custom_voice_id || state.health?.custom_voice_id || "";
+  if (selected === "leo") return "leo";
+  if (custom) return custom;
+  return selected;
 }
 
 function fillPersona() {
@@ -552,14 +573,19 @@ async function speak(text, kind) {
   state.lastSpokenAt = Date.now();
   setStatus("Speaking", "is-talk");
   pushLine("avatar", line);
+  stage.setSpeech(line);
+  const releaseMouth = holdMouthOpen();
   const typed = kind === "exact" || kind === "answer" || kind === "question";
   const verbatim = typed && !!state.health?.tts_verbatim;
   const pieces = verbatim ? [line] : sentenceGroups(line, 4);
   if (line.length > 1500) toast("Only the first 1500 characters are spoken.");
   try {
+    if (!state.persona?.xai_custom_voice_id && ($("voice-file")?.files?.[0] || state.voiceBlob)) {
+      await cloneVoice();
+    }
     let usedMac = false;
     for (const piece of pieces) {
-      const payload = { text: piece, voice: state.persona?.voice || "" };
+      const payload = { text: piece, voice: voiceForSpeech() };
       if (verbatim) payload.verbatim = true;
       const response = await fetch("/api/tts", {
         method: "POST",
@@ -568,6 +594,10 @@ async function speak(text, kind) {
       });
       const type = response.headers.get("content-type") || "";
       if (!type.includes("audio")) {
+        const payload = await response.json().catch(() => ({}));
+        if (state.health?.tts === "xai") {
+          toast(payload.error || "xAI could not be reached, so the browser voice spoke. Rex is still the voice that will be used when xAI answers.");
+        }
         await browserSpeak(line);
         break;
       }
@@ -584,10 +614,23 @@ async function speak(text, kind) {
     toast(error.message);
     await browserSpeak(line);
   } finally {
+    releaseMouth();
+    stage.clearSpeech();
     state.speaking = false;
     state.lastSpokenAt = Date.now();
     setStatus(state.live ? "Listening" : "Idle", state.live ? "is-live" : "");
   }
+}
+
+function holdMouthOpen() {
+  const timer = window.setInterval(() => {
+    if (state.audio && !state.audio.paused && state.audio._heard) return;
+    stage.setTalkEnergy(0.78);
+  }, 70);
+  return () => {
+    window.clearInterval(timer);
+    stage.setTalkEnergy(0);
+  };
 }
 
 function syncHandButton() {
@@ -603,20 +646,8 @@ function syncHandButton() {
 
 async function requestAce(blob) {
   const ace = state.health?.ace;
-  if (!ace) {
-    if (!state.aceWarned) {
-      state.aceWarned = true;
-      toast("Audio2Face is not on this server, so the mouth is not driven.");
-    }
-    return null;
-  }
-  if (!ace.library || !ace.listening) {
-    if (!state.aceWarned) {
-      state.aceWarned = true;
-      toast(ace.detail || "Audio2Face is not connected, so the mouth is not driven.");
-    }
-    return null;
-  }
+  if (!ace) return null;
+  if (!ace.library || !ace.listening) return null;
   try {
     const response = await fetch("/api/a2f", {
       method: "POST",
@@ -636,13 +667,32 @@ async function requestAce(blob) {
   }
 }
 
-function playWav(blob, frames) {
+function playWav(blob, frames, options = {}) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
     const audio = state.audio;
+    const startAt = Math.max(0, Number(options.startAt) || 0);
     audio.src = url;
     const sink = $("speaker").value;
     let frameIndex = -1;
+    let settled = false;
+    let failed = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      state.stopAudio = null;
+      stage.setTalkEnergy(0);
+      stage.applyFaceWeights({});
+      if (options.sing) stage.setSinging(false);
+      URL.revokeObjectURL(url);
+      resolve(!failed);
+    };
+    state.stopAudio = () => {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      finish();
+    };
     const trackFace = () => {
       if (!frames?.length || audio.ended) return;
       const time = audio.currentTime;
@@ -654,25 +704,155 @@ function playWav(blob, frames) {
       }
       if (!audio.paused && !audio.ended) requestAnimationFrame(trackFace);
     };
-    const play = () => {
+    const begin = () => {
       wireAnalyser(audio);
-      audio.onended = () => {
-        stage.applyFaceWeights({});
-        URL.revokeObjectURL(url);
-        resolve();
+      if (options.sing) {
+        audio._singPeak = 0;
+        audio._phrase = 0;
+        audio._note = 0;
+        audio._bright = 0.45;
+        stage.clearSpeech();
+        stage.setSinging(true);
+      } else if (Number.isFinite(audio.duration)) {
+        stage.setSpeechDuration(audio.duration);
+      }
+      const driveMouth = () => {
+        if (settled || audio.ended || audio.paused) return;
+        if (!options.sing) stage.setSpeechTime(audio.currentTime || 0);
+        if (!frames?.length && !audio._heard) {
+          if (options.sing) stage.setSingFeel({ loud: 0.78, phrase: 0.66, bright: 0.55, punch: 0.42 });
+          else stage.setTalkEnergy(0.78);
+        }
+        requestAnimationFrame(driveMouth);
       };
-      audio.onplaying = () => requestAnimationFrame(trackFace);
-      audio.play().catch(() => resolve());
+      audio.onended = finish;
+      audio.onerror = () => {
+        failed = true;
+        finish();
+      };
+      audio.onplaying = () => {
+        audio._heard = false;
+        requestAnimationFrame(trackFace);
+        requestAnimationFrame(driveMouth);
+      };
+      audio.play().catch(() => {
+        failed = true;
+        finish();
+      });
+    };
+    const play = () => {
+      if (startAt <= 0.05) {
+        begin();
+        return;
+      }
+      const seek = () => {
+        const duration = audio.duration;
+        const at = Number.isFinite(duration) ? Math.min(startAt, Math.max(0, duration - 0.05)) : startAt;
+        if (Math.abs((audio.currentTime || 0) - at) < 0.05) {
+          begin();
+          return;
+        }
+        audio.addEventListener("seeked", () => begin(), { once: true });
+        try {
+          audio.currentTime = at;
+        } catch (error) {
+          begin();
+        }
+      };
+      if (audio.readyState >= 1) seek();
+      else audio.addEventListener("loadedmetadata", seek, { once: true });
     };
     if (sink && audio.setSinkId) audio.setSinkId(sink).then(play).catch(play);
     else play();
   });
 }
 
+function clockTime(seconds) {
+  const whole = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(whole / 60);
+  const remain = whole % 60;
+  return `${minutes}:${String(remain).padStart(2, "0")}`;
+}
+
+function songKey(file) {
+  return file ? `${file.name}:${file.size}:${file.lastModified}` : "";
+}
+
+function syncSongButton() {
+  const file = $("song-file").files[0];
+  const pause = state.songPause;
+  const canResume = !!(file && pause && pause.key === songKey(file));
+  $("sing-song").textContent = canResume ? "Resume song" : "Send song to the meeting";
+}
+
+async function singSong() {
+  const file = $("song-file").files[0];
+  if (!file) {
+    toast("Choose a song file first.");
+    return;
+  }
+  if (state.speaking) {
+    toast("Wait until the current audio finishes.");
+    return;
+  }
+  const pause = state.songPause;
+  const resumeAt = pause && pause.key === songKey(file) ? pause.time : 0;
+  state.songPause = null;
+  state.speaking = true;
+  state.songStopped = false;
+  $("sing-song").disabled = true;
+  $("stop-song").disabled = false;
+  setStatus("Singing", "is-talk");
+  const note = $("song-note");
+  note.textContent = resumeAt > 0.2
+    ? `${file.name} is resuming at ${clockTime(resumeAt)}.`
+    : `${file.name} is starting.`;
+  const timer = window.setInterval(() => {
+    const audio = state.audio;
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    note.textContent = `${file.name} · ${clockTime(audio.currentTime)} / ${clockTime(audio.duration)}`;
+  }, 250);
+  try {
+    const played = await playWav(file, null, { sing: true, startAt: resumeAt });
+    if (state.songStopped && state.songPause) {
+      note.textContent = `${file.name} paused at ${clockTime(state.songPause.time)}. Resume continues from there.`;
+    } else if (state.songStopped) note.textContent = `${file.name} stopped.`;
+    else if (played) note.textContent = `${file.name} finished.`;
+    else toast("That song file could not be played. Use mp3, wav, m4a, or aac.");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    window.clearInterval(timer);
+    stage.setSinging(false);
+    stage.setTalkEnergy(0);
+    $("sing-song").disabled = false;
+    $("stop-song").disabled = true;
+    syncSongButton();
+    state.speaking = false;
+    setStatus(state.live ? "Listening" : "Idle", state.live ? "is-live" : "");
+  }
+}
+
+function stopSong() {
+  const audio = state.audio;
+  const file = $("song-file").files[0];
+  const time = audio?.currentTime || 0;
+  const duration = audio?.duration;
+  const nearEnd = Number.isFinite(duration) && time >= duration - 0.35;
+  if (file && time > 0.2 && !nearEnd) {
+    state.songPause = { key: songKey(file), time, name: file.name };
+  } else {
+    state.songPause = null;
+  }
+  state.songStopped = true;
+  if (state.stopAudio) state.stopAudio();
+}
+
 function wireAnalyser(audio) {
   if (audio._wired) return;
   try {
   const context = new AudioContext();
+  state.audioContext = context;
   context.resume();
   const source = context.createMediaElementSource(audio);
   const analyser = context.createAnalyser();
@@ -681,6 +861,17 @@ function wireAnalyser(audio) {
   analyser.connect(context.destination);
   audio._wired = true;
   const data = new Uint8Array(analyser.fftSize);
+  const freq = new Uint8Array(analyser.frequencyBinCount);
+  const band = (lo, hi) => {
+    const nyquist = context.sampleRate / 2;
+    const bins = freq.length;
+    let start = Math.max(0, Math.floor((lo / nyquist) * bins));
+    let end = Math.min(bins, Math.ceil((hi / nyquist) * bins));
+    if (end <= start) end = Math.min(bins, start + 1);
+    let sum = 0;
+    for (let index = start; index < end; index += 1) sum += freq[index];
+    return sum / (end - start) / 255;
+  };
   const pump = () => {
     if (!audio.paused) {
       analyser.getByteTimeDomainData(data);
@@ -689,8 +880,27 @@ function wireAnalyser(audio) {
         const sample = (data[index] - 128) / 128;
         sum += sample * sample;
       }
-      stage.setTalkEnergy(Math.min(1, Math.sqrt(sum / data.length) * 8));
-      if (Math.sqrt(sum / data.length) > 0.08) stage.pulseSyllable();
+      const level = Math.sqrt(sum / data.length);
+      if (stage.singing) {
+        analyser.getByteFrequencyData(freq);
+        const voice = band(200, 3500);
+        const low = band(180, 700);
+        const high = band(1400, 4200);
+        audio._singPeak = Math.max(voice, (audio._singPeak || voice) * 0.9985);
+        const loud = Math.min(1, voice / Math.max(0.045, audio._singPeak));
+        const brightNow = high / (high + low + 0.02);
+        audio._bright = (audio._bright ?? 0.45) + (brightNow - (audio._bright ?? 0.45)) * 0.18;
+        const note = audio._note || 0;
+        const phrase = audio._phrase || 0;
+        audio._note = note + (loud - note) * (loud > note ? 0.52 : 0.2);
+        audio._phrase = phrase + (loud - phrase) * (loud > phrase ? 0.07 : 0.03);
+        const punch = Math.max(0, Math.min(1, (audio._note - audio._phrase) * 3.4));
+        if (loud > 0.08) audio._heard = true;
+        stage.setSingFeel({ loud, phrase: audio._phrase, bright: audio._bright, punch });
+      } else if (level > 0.015) {
+        audio._heard = true;
+        stage.setTalkEnergy(Math.min(1, level * 8));
+      }
     }
     requestAnimationFrame(pump);
   };
@@ -706,14 +916,44 @@ function browserSpeak(text) {
       resolve();
       return;
     }
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voice = speechSynthesis.getVoices().find((item) => item.name === state.persona?.voice);
-    if (voice) utterance.voice = voice;
-    utterance.onboundary = () => stage.pulseSyllable();
-    utterance.onend = () => resolve();
-    utterance.onerror = () => resolve();
-    speechSynthesis.cancel();
-    speechSynthesis.speak(utterance);
+    let started = false;
+    const speakNow = () => {
+      if (started) return;
+      started = true;
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = speechSynthesis.getVoices();
+      const preferred = ["Reed", "Daniel", "Alex", "Aaron", "Fred"];
+      const named = voices.find((item) => item.name === state.persona?.voice);
+      const male = preferred.map((name) => voices.find((item) => item.name.includes(name))).find(Boolean);
+      const english = voices.find((item) => (item.lang || "").toLowerCase().startsWith("en"));
+      if (named || male || english) utterance.voice = named || male || english;
+      let timer = 0;
+      let finished = false;
+      const stop = () => {
+        if (finished) return;
+        finished = true;
+        window.clearInterval(timer);
+        stage.setTalkEnergy(0);
+        resolve();
+      };
+      utterance.onstart = () => {
+        stage.setSpeechDuration(Math.max(0.45, String(text || "").length / 13));
+        stage.setSpeechTime(0);
+        timer = window.setInterval(() => {
+          stage.setTalkEnergy(0.78);
+        }, 70);
+      };
+      utterance.onboundary = () => stage.pulseSyllable();
+      utterance.onend = stop;
+      utterance.onerror = stop;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utterance);
+    };
+    if (speechSynthesis.getVoices().length) speakNow();
+    else {
+      speechSynthesis.addEventListener("voiceschanged", speakNow, { once: true });
+      window.setTimeout(speakNow, 400);
+    }
   });
 }
 
@@ -800,19 +1040,24 @@ async function toggleRecording() {
     stream.getTracks().forEach((track) => track.stop());
     state.recorder = null;
     state.voiceBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    const seconds = Math.round((Date.now() - (state.recordStarted || Date.now())) / 1000);
     $("record-voice").textContent = "Record your voice";
-    trainToast("Recording ready. Clone a male voice when you want meetings to use it.");
+    if (seconds < 30) {
+      trainToast("That clip is short. About 90 seconds lets xAI keep your tone. Sending it anyway.");
+    }
+    cloneVoice(state.voiceBlob);
   };
   recorder.start();
   state.recorder = recorder;
+  state.recordStarted = Date.now();
   $("record-voice").textContent = "Stop recording";
   window.setTimeout(() => {
     if (state.recorder === recorder && recorder.state === "recording") recorder.stop();
   }, 90000);
 }
 
-async function cloneVoice() {
-  const chosen = $("voice-file").files[0] || state.voiceBlob;
+async function cloneVoice(recording) {
+  const chosen = recording instanceof Blob ? recording : ($("voice-file").files[0] || state.voiceBlob);
   if (!chosen) {
     trainToast("Record your voice or choose an audio file first.");
     return;
@@ -829,7 +1074,8 @@ async function cloneVoice() {
     state.health = await api("/api/health");
     fillVoices(state.health.voices || []);
     fillPersona();
-    trainToast("Male voice cloned from your recording. It is selected for meetings.");
+    const short = data.short_recording ? " A clip closer to 90 seconds matches your tone more closely." : "";
+    trainToast(`Your recording is now the voice for Speak into the meeting.${short}`);
   } catch (error) {
     trainToast(error.message);
   }
@@ -890,6 +1136,36 @@ async function saveSettings(options = {}) {
   }
 }
 
+async function speakAudio(text) {
+  stage.setSpeech(text);
+  const releaseMouth = holdMouthOpen();
+  try {
+    const response = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice: state.persona?.voice || "", verbatim: true }),
+    });
+    const type = response.headers.get("content-type") || "";
+    if (!type.includes("audio")) {
+      const payload = await response.json().catch(() => ({}));
+      if (state.health?.tts === "xai") {
+        toast(payload.error || "xAI could not be reached, so the browser voice spoke. Rex is still the voice that will be used when xAI answers.");
+      }
+      await browserSpeak(text);
+      return;
+    }
+    const engine = response.headers.get("X-Avatar-Voice");
+    if (engine === "mac" && state.health?.tts === "xai") {
+      toast("xAI voice was unavailable, so a Mac voice spoke instead.");
+    }
+    const blob = await response.blob();
+    await playWav(blob, await requestAce(blob));
+  } finally {
+    releaseMouth();
+    stage.clearSpeech();
+  }
+}
+
 async function testAudio2Face() {
   const button = $("test-a2f");
   const note = $("a2f-test");
@@ -925,7 +1201,24 @@ async function testAudio2Face() {
     }
     const summary = payload.summary || {};
     if (!payload.ok || !summary.moved) {
-      note.textContent = payload.error || "Audio2Face did not move the mouth.";
+      const reason = payload.error || "Audio2Face did not return mouth weights.";
+      note.textContent = `${reason} Speaking the line now, and the mouth follows that audio.`;
+      state.speaking = true;
+      setStatus("Speaking", "is-talk");
+      const releaseMouth = holdMouthOpen();
+      try {
+        if (payload.wav_base64) {
+          const binary = atob(payload.wav_base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+          await playWav(new Blob([bytes], { type: "audio/wav" }), payload.frames || []);
+        } else {
+          await speakAudio("Hello. The mouth follows these words until Audio2Face is running.");
+        }
+        note.textContent = `${reason} That line was spoken, and the mouth followed the audio.`;
+      } finally {
+        releaseMouth();
+      }
       return;
     }
     const playing = `Audio2Face is working. ${summary.frames} frames over ${summary.duration}s from ${summary.source}. Strongest mouth move: ${summary.strongest} at ${summary.peak}. The avatar is speaking that sample now.`;
